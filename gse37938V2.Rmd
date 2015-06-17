@@ -1,0 +1,361 @@
+**IL-1b, IL-10 and IFNg trajectories in Helicobacter pylori infection**
+
+*EXTRACTION OF EXPRESSION VALUES*
+
+```{r Chunk 1: download data}
+#install.packages("knitr")
+library("knitr")
+####download data ########
+source("http://bioconductor.org/biocLite.R")
+biocLite("GEOquery")
+library(GEOquery)
+# Get the gse file online without downloading it
+gse37938 <- suppressWarnings(getGEO("GSE37938", GSEMatrix=F)) 
+## Or move to the directory where gse file is stored
+#setwd("/home/elab/Desktop/Shruti/GEO/")
+#gse37938 <- suppressWarnings(getGEO(filename='GSE37938_family.soft.gz'))
+## Date of download: september 17th,2013
+```
+
+```{r Chunk 2: GSM and GPL file annotation }
+#### GSM and GPL file annotation.################### 
+## Function to extract text based on pattern matching
+Extraction <- function(pattern,input)
+{
+  matched_index <- regexpr(pattern,input)
+  matched_word <- regmatches(input,matched_index)
+  return(matched_word)
+}
+
+## calculate total no.of gsm files 
+sample_size <- length(GSMList(gse37938))
+## creating an empty dataframe where each row represent a gsm file and columns represents its different features
+id_dataframe <- matrix(data=NA,nrow=sample_size,ncol=5,dimnames=list(c(),c("GSM_ID","GPL_ID","cell_type","infection_status","time")))
+for(j in seq_len(sample_size))
+{
+  id_dataframe[j,"GSM_ID"] <- Meta(GSMList(gse37938)[[j]])$geo_accession
+  id_dataframe[j,"GPL_ID"] <- Meta(GSMList(gse37938)[[j]])$platform_id
+  id_dataframe[j,"cell_type"] <- Meta(GSMList(gse37938)[[j]])$characteristics_ch2[3]
+  id_dataframe[j,"time"] <- Meta(GSMList(gse37938)[[j]])$characteristics_ch2[1]
+  id_dataframe[j,"infection_status"] <- Meta(GSMList(gse37938)[[j]])$characteristics_ch2[2]  
+  
+}
+
+## sometimes the infection_status and time columns are swaped. so check the column category before adding to matrix. If the time category
+# has the term "time", add it to 5th column in the matrix. if it has the term "infection", add it to 4th columnif (grepl("infection",time))
+for(i in seq_len(sample_size))
+{
+  if(grepl("time",id_dataframe[i,"infection_status"]))
+  {
+    day <- id_dataframe[i,"infection_status"]
+    infection <- id_dataframe[i,"time"]
+    id_dataframe[i,"infection_status"] <- infection
+    id_dataframe[i,"time"] <- day
+  }
+}
+id_dataframe <- apply(id_dataframe,2,function(x) {sub(".*[:]\\s","",x)})
+## removing any non-numeric values from column5(time)
+id_dataframe[,"time"] <- (sub("\\s[d]","",id_dataframe[,"time"],ignore.case=T))
+id_dataframe <- as.data.frame(id_dataframe,stringsAsFactors=F)
+id_dataframe$time <- as.numeric(id_dataframe$time)
+```
+
+```{r Chunk 3: find GPL_ID for gene of your interest}
+### Find GPL_ID for gene of your interest.
+
+## Search for the "ID" of your gene of interest from gpllist, ensure it has same name in all gpl files. Then look for its corresponding "ID_REF" in gsm file, ensure the order of ids is same in all gsm files. Then extract the expression value for this gene "ID_REF" from all gsm files.
+
+## creating probeset for each gpl
+probeset1 <- Table(GPLList(gse37938)[[1]])[,c("ID","GB_LIST")]
+probeset2 <- Table(GPLList(gse37938)[[2]])[,c("ID","GB_LIST","geneName","geneSymbol")]
+#probeset3 <- Table(GPLList(gse37938)[[3]])[,c("ID","Composite Element Database Entry[Gene Name]","Composite Element Database Entry[Gene Symbol]")]
+#probeset3 <- Table(GPLList(gse37938)[[3]])[,c("ID","Composite.Element.Database.Entry.Gene.Name.","Composite.Element.Database.Entry.Gene.Symbol.")]
+probeset3 <- Table(GPLList(gse37938)[[3]])[,c(1,8,9)]
+## assigning same column names to probeset3 as in probeset2
+colnames(probeset3)[c(2,3)] <- c("geneName","geneSymbol")
+
+## a function to get "ID" for a gene from a gpl files and check if its same for both the gpl files.
+GplId <- function(pattern)
+{
+  symbol2 <- grep(pattern,probeset2$geneSymbol,ignore.case=T)
+  symbol_gpl2 <- probeset2[symbol2,]
+  symbol_gpl2_ids <- as.numeric(symbol_gpl2$ID)
+  
+  symbol3 <- grep(pattern,probeset3$geneSymbol,ignore.case=T)
+  symbol_gpl3 <- probeset3[symbol3,]
+  symbol_gpl3_ids <- as.numeric(symbol_gpl3$ID)
+  
+  if(length(setdiff(symbol_gpl2_ids,symbol_gpl3_ids)) == 0)
+  {
+    gpl_id_info <- data.frame(probeset2[symbol2,c("ID","GB_LIST","geneSymbol")],stringsAsFactors=F,row.names=NULL)
+    return(gpl_id_info)
+  }
+  else
+  {
+    print("IDs in two probesets do not match")
+  }
+}
+
+## search for symbol in probesets (gplfiles) which correspond to Ifng 
+test_ifng2 <- grep("[I][f][n][-]?\\s?[g]",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_ifng2,]
+## note: there is no perfect way to guess what is the exact symbol used for ifng, so look for all closely related enteries and then chose the exact one.
+pattern_ifng <- ("^[I][f][n][-]?\\s?[g]$")
+gpl_id_ifng <- GplId(pattern_ifng)
+
+## search for symbol for IL12
+test_il12 <- grep("il12",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_il12,]
+## since alpha subunit was used in the pcr study, look only for IL12a
+pattern_il12 <- "^[i][l][-]?\\s?[1][2][-]?\\s?[a]"
+## gpl ID for IL12a
+gpl_id_il12 <- GplId(pattern_il12)
+
+## search for symbol for IL10
+test_il10 <- grep("il10",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_il10,]
+pattern_il10 <- "^[i][l][-]?\\s?[1][0]$"
+## gpl ID for IL10
+gpl_id_il10 <- GplId(pattern_il10)
+
+## search for symbol for IL1beta
+test_il1b <- grep("il1b",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_il1b,]
+pattern_il1b <- "^[i][l][-]?\\s?[1][-]?\\s?[b]"
+## gpl ID for IL1beta
+gpl_id_il1b <- GplId(pattern_il1b)
+
+## search for symbol for shh
+test_shh <- grep("shh",probeset2$geneSymbol,ignore.case=T)
+## since no macth found, searched in geneName
+test_shh <- grep("hedgehog",probeset2$geneName,ignore.case=T)
+#probeset2[test_shh,]
+test_shh <- grep("hedgehog",probeset3$geneName,ignore.case=T)
+#probeset3[test_shh,]
+## data does not seem to have a probe for sonic hedgehog
+
+## search for symbol for nfkb
+test_nfkb <- grep("nfkb",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_nfkb,]
+## since p65 was used in the pcr study, look only for p65
+test_p65 <- grep("[p][-]?\\s?[6][5]",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_p65,]
+test_p65 <- grep("[p][-]?\\s?[6][5]",probeset2$geneName,ignore.case=T)
+#probeset2[test_p65,]
+## did not find in probeset2, so looked in probeset3
+test_p65 <- grep("[p][-]?\\s?[6][5]",probeset3$geneSymbol,ignore.case=T)
+#probeset3[test_p65,]
+## data does not seem to have a probe for p65
+
+## search for symbol for mip-2
+test_mip2 <- grep("mip",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_mip2,]
+## search by other names of mip-2
+test_mip2 <- grep("il8",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_mip2,]
+## search by other names of mip-2
+test_mip2 <- grep("cxcl",probeset2$geneSymbol,ignore.case=T)
+#probeset2[test_mip2,]
+pattern_mip2 <- "^[c][x][c][l][-]?\\s?[2][-]?\\s?"
+## gpl ID for cxcl2
+gpl_id_il12 <- GplId(pattern_mip2)
+
+## to check if the sequence of ID_REF is same for all GSM files
+ID_REF_matrix <- do.call('cbind',
+                         lapply(GSMList(gse37938),function(x)
+                         {
+                           tab <- Table(x)
+                           return(tab$ID_REF)
+                         } 
+                         )
+)
+## if the output of following unique command which compares all columns element wise has only 1 column, then it shows that the sequence of ID_REF is same for all GSM files
+if(dim(unique(ID_REF_matrix,MARGIN=2))[2] != 1)
+{
+  print("sequence of ID_REF is not same for all GSM files")
+}
+rm(ID_REF_matrix)
+
+gpl_id_dataframe <- data.frame(rbind(gpl_id_ifng,gpl_id_il12,gpl_id_il1b,gpl_id_il10),stringsAsFactors=F,row.names=NULL)
+```
+
+```{r Chunk 4: extract expression values for gene of your interest}
+###Extract expression values for gene of your interest.
+
+##Look for the gpl ID in gsm flies and extract the normalized median ratio of expression values (stored in column 51 - RAT2N_MEDIAN)
+expression_values <- do.call('rbind',
+                             lapply(GSMList(gse37938),function(x)
+                             {
+                               tab <- Table(x)
+                               mymatch <- match(gpl_id_dataframe$ID,tab$ID_REF)
+                               return(tab$RAT2N_MEDIAN[mymatch])
+                             }
+                             )
+)
+
+gpl_id_transpose <- t(gpl_id_dataframe)
+expression_values2 <- data.frame(rbind(gpl_id_transpose[c("ID","GB_LIST"),],expression_values),stringsAsFactors=F)
+colnames(expression_values2) <- gpl_id_transpose["geneSymbol",]
+
+## combine expression_values2 (expression values) with id_dataframe(annotation)
+empty_dataframe <- data.frame(matrix(nrow=2,ncol=5,dimnames=list(c(),c("GSM_ID","GPL_ID","cell_type","infection_status","time")) ))
+empty_dataframe[1:2,1] <- c("ID","GB_LIST")
+new_id_dataframe <- rbind(empty_dataframe,id_dataframe)
+expression_values_annotation <- merge(new_id_dataframe[,-2],expression_values2,by.x="GSM_ID",by.y="row.names",sort=F)
+```
+
+*DATA ANALYSIS*
+
+```{r Chunk 5: function to calculate median for each probe at each time point}
+####function to calculate median for each probe at each time point.
+
+## Install gtools package to run "mixedorder". Command: 
+#install.packages("gtools")
+library("gtools")
+
+## function to find subsets of data satisfying different conditions
+SubsetData <- function(data,CellInfo,InfectionStatus)
+{
+  cell_status <- subset(data,cell_type==CellInfo & infection_status==InfectionStatus)
+  ## sort results on basis of time
+  cell_status <- cell_status[mixedorder(cell_status$time),]
+  return(cell_status)
+}
+
+## function to calculate median of expression value for each time point for a specific cell type and condition
+ExpressionStatistics <- function(data,CellInfo,InfectionStatus,gene_name)
+{
+  specific_data <- SubsetData(data,CellInfo,InfectionStatus) 
+  specific_data[,-c(1:3)] <- sapply(specific_data[,-c(1:3)],as.numeric)
+  ## find the days at which the samples were collected
+  days_unique <- unique(specific_data$time)
+  
+  statistics_dataframe <- as.data.frame(matrix(data=NA,nrow=length(days_unique),ncol=4,dimnames=list(c(),c("days","observation_count","NA_count","median")) ))
+  for(i in seq_along(days_unique) ) 
+  {
+    date <- days_unique[i]
+    specific_data_day <- subset(specific_data, specific_data$time==date)
+    ## number of observations for each time point
+    no_of_observations <- table(specific_data_day$time)[[1]]
+    ## number of observations with value as NA 
+    no_of_NA <- sum(is.na(specific_data_day[[gene_name]]))
+    ## calculate median
+    median_value <- median((specific_data_day[[gene_name]]), na.rm = T)
+    
+    ## add above calculated values to the matrix
+    statistics_dataframe$observation_count[i] <- no_of_observations
+    statistics_dataframe$days[i] <- date
+    statistics_dataframe$NA_count[i] <- no_of_NA
+    statistics_dataframe$median[i] <- median_value
+  }
+  
+  ## flag warnings if for a specific time point, the no.of NAs is >=  (total no.of observations)-1 
+  for(i in seq_len(nrow(statistics_dataframe)))  
+  {
+    if(statistics_dataframe$NA_count[i] >= ( statistics_dataframe$observation_count[i] - 1) )
+    {
+      day <- statistics_dataframe$days[i]
+      warning(sprintf("very less data points for %s in %s cell for %s on day %s",gene_name,CellInfo,InfectionStatus,day),call.=F)
+    }
+  }
+  return(statistics_dataframe)
+}  
+
+## function to detect insufficient data (with many NA values). 
+threshold <- 2
+isInsufficientDataCheck <- function(matrix_data)
+{  
+  count <- c(0)
+  for(i in seq_len(nrow(matrix_data)))  
+  {
+    if(matrix_data$NA_count[i] >= ( matrix_data$observation_count[i] - 1) )
+    {
+      count <- count+1
+    }
+  }
+  if(count >= threshold)
+  {
+    return(TRUE)
+  }
+  else
+  {
+    return(FALSE) 
+  }
+}
+```
+
+*DATA VISUALIZATION*
+
+```{r Chunk 6: }
+## function to generate time series plot with both control and infected conditions overlayed
+OverlayTimePlot <- function(data,CellInfo,gene_name)
+{
+  gene_cell_control <- ExpressionStatistics(data,CellInfo,"control",gene_name)
+  gene_cell_infected <- ExpressionStatistics(data,CellInfo,"infected",gene_name)
+  
+  ## flag warnings if insufficient data for 2 or more time points
+  if ( (isInsufficientDataCheck(gene_cell_control)==TRUE) | (isInsufficientDataCheck(gene_cell_infected) == TRUE))
+  {
+    stop("very less data to do analysis",call.=F)    
+  }
+  
+  ## to view both control and infected graphs on same plot, find the range of y-axis  
+  gene_cell_min <- min(c(gene_cell_control$median,gene_cell_infected$median),na.rm=T)
+  gene_cell_max <- max(c(gene_cell_control$median,gene_cell_infected$median),na.rm=T)
+  
+  ## to save graphs as pdf in current directory
+  #pdf(sprintf("%s_%s.pdf",CellInfo,gene_name))
+  ## set the margins and margin line for plot
+  par(mar=c(4,4,3,8),xpd=T,mgp=c(2.5,1,0))
+  plot(gene_cell_control$days,gene_cell_control$median,type="b",col=4,xaxt="n",main=paste(gene_name,":",CellInfo,"cell"),font.main=2,cex.main=1.5,xlab="Days",ylab="Gene  Expression  (normalized  ratio)",font.lab=2,ylim=c(gene_cell_min,gene_cell_max)) 
+  ## to overlay new plot on same graph
+  par(new=T)
+  plot(gene_cell_infected$days,gene_cell_infected$median,type="b",col=2,pch=17,lty=2,xaxt="n",xlab="",ylab="",ylim=c(gene_cell_min,gene_cell_max))
+  axis(1,at=c(2,7,14,28))
+  legend("right",inset=c(-0.3,0),legend=c("mock","H.pylori"),fill=F,border=F,lty=c(1,2),col=c(4,2),pch=c(1,17),bty="n")  
+  #dev.off()
+}
+```
+
+```{r Chunk 7: plotting data}
+####plotting data.
+
+## To select expression values for a gene with more than 1 probe, we take median value of its probes that have same gb_list id.
+## function to calculate median of given columns
+GeneMedian <- function(data,VectorOfGenenames) # provide names of the columns in form of a vector 
+{
+  ## create an empty matrix for storing median values
+  probe_median <- as.data.frame(matrix(data=NA,nrow=nrow(data),ncol=1,dimnames=list(c(),sub("\\..*","",VectorOfGenenames[1]))))
+  #for(i in seq_len(nrow(data)))
+  for(i in 3:nrow(data))
+  {
+    probe_values <- as.vector(data[i,VectorOfGenenames],mode="numeric")
+    probe_median[i,1] <- median(probe_values,na.rm=T)
+  }
+  return(probe_median)
+}
+
+## combine probes of il1b that have same gb_list id
+il1b_median <- GeneMedian(expression_values_annotation,c("Il1b","Il1b.2","Il1b.3"))
+##combine probes of il10 that have same gb_list id
+il10_median <- GeneMedian(expression_values_annotation,c("Il10","Il10.1","Il10.2","Il10.3"))
+updated_exp_data <- data.frame(cbind(expression_values_annotation[,1:5],il1b_median,il10_median))
+
+gene <- c("Il1b","Il10","Ifng")
+cell_category <- c("chief","parietal","pit")
+## generate plots for all genes for each cell type
+for(i in seq_along(gene))
+{
+  for(j in seq_along(cell_category))
+  {
+    OverlayTimePlot(updated_exp_data,cell_category[j],gene[i])
+  }
+}
+
+## plots for il1b and il10 probes representing a single GB_list ID
+#for(j in seq_along(cell_category))
+#{
+#  OverlayTimePlot(expression_values_annotation,cell_category[j],"Il1b.1")
+#   OverlayTimePlot(expression_values_annotation,cell_category[j],"Il10.4")
+#}
+```
